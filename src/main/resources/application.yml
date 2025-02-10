@@ -1,0 +1,51 @@
+server:
+  port: 8089
+  servlet:
+    context-path: /
+
+
+spring:
+  thymeleaf:
+    cache: false
+    check-template-location: true
+    charset: UTF-8
+    content-type: text/html
+    enabled: true
+    mode: HTML
+    prefix: classpath:/templates/
+    suffix: .html
+  boot:
+    admin:
+      client:
+        url: http://127.0.0.1:8089
+  redis:
+    host: 127.0.0.1
+    port: 6379
+#      timeout: 6000
+#      ###################以下为redis哨兵增加的配置###########################
+#      sentinel:
+#        nodes: 127.0.0.1:26379,127.0.0.1:26380,127.0.0.1:26381
+#        master: mymaster
+#      ###################以下为lettuce连接池增加的配置###########################
+#      lettuce:
+#        pool:
+#          max-active: 100 # 连接池最大连接数（使用负值表示没有限制）
+#          max-idle: 100 # 连接池中的最大空闲连接
+#          min-idle: 50 # 连接池中的最小空闲连接
+#          max-wait: 6000 # 连接池最大阻塞等待时间（使用负值表示没有限制
+
+
+
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: '*'
+    jmx:
+      exposure:
+        include: '*'
+  security:
+    enable: false
+
+
