@@ -1,5 +1,7 @@
 package com.example.suyanqrtcpcode.constants;
 
+import com.example.suyanqrtcpcode.bean.PrinterConfigData;
+
 import java.util.HashMap;
 import java.util.Map;
 
@@ -7,11 +9,11 @@ public class HttpUrlFactory {
 
     private  static  final  Map<String,String> HTTP_METHOD_MAP=new  HashMap<>();
     
-    //public static  final  String  HTTPCILENURT="http://wf.suyantek.com/suyan-web/rest/";
+    public static  final  String  HTTPCILENURT="http://xxx/suyan-web/rest/";
     
     public  static final String  DOMAIN_NAME="http://cww.96656.com.cn/";
 
-    public static  final  String  HTTPCILENURT="http://127.0.0.1:8088/suyan-web/rest/";
+    //public static  final  String  HTTPCILENURT="http://127.0.0.1:8080/suyan-web/rest/";
 
     public static final String  QRCODEMANAGEMENTKEYVALUS ="qrCodeManagement:keyValus";
     
@@ -19,9 +21,7 @@ public class HttpUrlFactory {
     
     public static final String  QRCODEMANAGEMENTCOUNTERKEY ="qrCodeManagement:counterKey";
 
-
     public static final String  QRCODEMANAGEMENTERRORBUCKET ="qrCodeManagement:errorBucket";
-
 
     //需要销毁的key
     public static final String  QRCODEMANAGEMENTDESTRUCTIONKEY ="qrCodeManagement:destructionKey";

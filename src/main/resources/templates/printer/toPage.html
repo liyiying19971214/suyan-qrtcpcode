@@ -42,7 +42,7 @@ div {
 table {
     border:1px solid #000;
     width:98%;
-    
+
 }
 tr td:first-child {
 }
@@ -67,7 +67,7 @@ td {
     position: fixed;
     z-index: 3;
     width: 500px;
-    min-height: 300px;
+    min-height: 400px;
     top:50%;
     left:50%;
     margin: -150px 0 0 -250px;
@@ -247,8 +247,6 @@ td {
     var ctxPath=[[${#httpServletRequest.getContextPath()}]];
     $(function() {
         //这里用来记录key的值
-        var bucketTypeId;
-        var bucketMode;
         $.ajax({
             type : 'POST',
             url : ctxPath+'/printerController/getDeviceStatus',// 请求的action路径
@@ -269,23 +267,35 @@ td {
             error : function() {// 请求失败处理函数
             },
             success : function(result) {
-                if(result!=null){
+                if(result.success){
                     //插入值
-                    let  soList=result.soList;
-                    let  bmList=result.bmList;
-                    for(let so of soList ){
-                        $("#bucketTypeId")[0].options.add(new Option(so.value,so.key));
+                    let  btList=result.obj.btList;
+                    let  bmList=result.obj.bmList;
+                    for(let bt of btList ){
+                        var option = new Option(bt.modelName,bt.id);
+                        option.dataset.domainName=bt.domainName;
+                        option.dataset.factoryCode=bt.factoryCode;
+                        $("#bucketTypeId")[0].options.add(option);
                     }
                     for(let bm of bmList){
                         $("#bucketMode")[0].options.add(new  Option(bm.value,bm.key));
                     }
+                    //给页面赋值
+                    $("#bucketTypeIdValue").text(result.obj.bucketTypeIdValue);
+                    $("#bucketModeValue").text(result.obj.bucketModeValue);
+                    $("#bucketDmValue").text(result.obj.bucketDmValue);
+                    $("#print_cnt").text(result.obj.print_cnt);
+                    changeSelect();
+                }else{
+                    alert(result.msg);
                 }
             }
+
         });
-        
-        
 
         openSocket();
+
+
     });
 
     /**
@@ -295,12 +305,22 @@ td {
         $("#loading").show();
         //打开model框
         openModal();
+
+        // 获取表单数据
+        const formData = {
+            bucketTypeId: $('#bucketTypeId').val(), // 获取 input 的值
+            bucketModeId: $('#bucketMode').val(),
+            myCheckbox: $('#addIdCheckbox').is(':checked'), // 获取 checkbox 的状态
+            domainName: $('#selectedInput').val(),
+        };
+
         //进行提交表单
         $.ajax({
             type:'post',
             dataType:"json",
             url: ctxPath+'/printerController/saveConfig',
-            data: $('#configForm').serialize(),
+            contentType: 'application/json', // 设置请求头为 JSON
+            data: JSON.stringify(formData),
             success:function (data){
                 //弹出内容框
                 console.log(data);
@@ -310,15 +330,16 @@ td {
                        create_paper_cancel();
                        //刷新对应的内容
                        window.location.reload();
-
                    }
                    alert(data.msg);
                 }
-
+            },
+            complete :function (){
+                closeModal();
             }
         })
     }
-    
+
     function setData(msgtype,value){
         $thistype=$('#'+msgtype);
         if(msgtype=='printer_status' || msgtype=='cellphone_status'){
@@ -329,7 +350,7 @@ td {
                 $thistype.find('img').attr('src','/img/terminal_disconn.png');
                 $thistype.find('font').html('未连接');
             }
-            
+
         }else if(msgtype=='printer_ready'){
             if(value){
                 $thistype.html('<font style="color: green;">打印机已就绪</font>');
@@ -353,6 +374,10 @@ td {
         }else if(msgtype=='generate_bucket'){
         	 if(value){
         	      $("#generateBucket").css('display','');
+                  //数量增加
+                 let currentCount = parseInt($('#print_cnt').text(), 10)//转化成10进制
+                 currentCount += 1;
+                 $("#print_cnt").text(currentCount);
         	 }else{
                  $("#generateBucket").css('display','none');
         	 }
@@ -441,7 +466,7 @@ td {
             //socket.send('{"haha":"hha"}');
         }
     }
-    
+
     //生成水桶信息
     function scrapBucket(){
     	//拿到对应的信息去生成水桶信息
@@ -467,9 +492,44 @@ td {
         $("#black").css('display','none');
         $("#my_dialog").css('display','none');
     }
-    
-    
-    
+
+    /**
+     * 单选框添加数据
+     */
+    function addFactoryCode(){
+        var isChecked = $("#addIdCheckbox").prop("checked");
+
+        const selectedOption = $("#bucketTypeId").find('option:selected');
+        const domainName = selectedOption.data('domainName');
+        const cbfactoryCode = selectedOption.data('factoryCode');
+
+        if(isChecked){
+            $("#selectedInput").val(domainName + cbfactoryCode);
+        }else{
+            $("#selectedInput").val(domainName);
+        }
+
+    }
+
+    /**
+     * 清空选择按钮
+     */
+    function  clearCheckBox(){
+        $("#addIdCheckbox").prop("checked", false);
+    }
+
+    /**
+     * 选择框选中事件
+     */
+    function  changeSelect(){
+
+        clearCheckBox();
+        addFactoryCode();
+
+
+    }
+
+
 </script>
 <body style="width:100%;height:100%;">
     <!-- Dialog的内容信息-->
@@ -487,7 +547,7 @@ td {
         <span class="dialog_close" style="display: inline-block;padding-left: 470px;border-bottom: 1px solid #eee;"></span>
         <form id="configForm" method="post" th:action="@{##}" onsubmit="return false">
             <p>水桶类型：
-                <select id="bucketTypeId" name="bucketTypeId">
+                <select id="bucketTypeId" name="bucketTypeId"  onchange="changeSelect()" >
                     <!-- 使用Thymeleaf语法进行循环渲染选项 -->
                     <option th:each="so : ${soList}" th:value="${so.key}" th:text="${so.value}"></option>
                 </select>
@@ -497,6 +557,15 @@ td {
                     <!-- 使用Thymeleaf语法进行循环渲染选项 -->
                     <option th:each="bm : ${bmList}" th:value="${bm.key}" th:text="${bm.value}"></option>
                 </select>
+            </p>二维码前缀:
+                <input id="selectedInput" type="text" readonly >
+                <!-- 是否添加ID的单选框 -->
+                <label>
+                    <input type="checkbox" id="addIdCheckbox" onchange="addFactoryCode()"> 拼接水桶Code编号
+                </label>
+            <p>
+
+
             </p>
             <div style="float: right;">
                 <button class="my-btn-gray" type="button" onclick="create_paper_cancel()">取消</button>
@@ -513,11 +582,13 @@ td {
         <tr>
             <td colspan="2">
                 今日已扫描：
-                <span id="print_cnt">[[${print_cnt}]]</span>
+                <span  type="color:red"  id="print_cnt"></span>
                 水桶类型：
-                <span>[[${bucketTypeId}]]</span>
+                <span  type="color:red" id="bucketTypeIdValue"></span>
                 采集方式：
-                <span >[[${bucketMode}]]</span>
+                <span  type="color:red"  id="bucketModeValue"></span>
+                二维码前缀：
+                <span  type="color:red"  id="bucketDmValue"></span>
                 上传剩余数：
                 <span id="uploadNum" style="color:gray;">0</span>
             </td>
@@ -532,7 +603,7 @@ td {
                 <img   th:src="@{/img/scanner.png}"
                     style="width:auto;height:100%;"></img>
             </td>
-            <td>    
+            <td>
                 <img  th:src="@{/img/printer.jpg}"
                     style="width:auto;height:100%;"></img>
                 <img  id="uploadImg"   th:src="@{/img/upload.png}"  style="width: 20px;height: 20px;margin-bottom: 10px;"/>
@@ -544,7 +615,7 @@ td {
         <td  id="printer_ip">
         </td>
         </tr>
-        
+
         <tr >
             <td >
                 <span id="cellphone_status">
@@ -553,13 +624,13 @@ td {
                     <font>未连接</font>
                 </span>
             </td>
-            <td>    
+            <td>
                 <span id="printer_status">
                     <img   th:src="@{/img/terminal_disconn.png}"
                             style="width:auto;height:70%;"></img>
                     <font style="height:100%;">未连接</font>
                 </span>
-        
+
             </td>
         </tr>
         <tr>
@@ -572,13 +643,13 @@ td {
         </tr>
         <tr>
             <td id="cellphone_send_msg">
-                
+
             </td>
             <td  id="printer_receive_msg">
-            
+
             </td>
         </tr>
-         
+
         <tr id="generateBucket"    style="display: none">
             <td>
             </td>
@@ -586,7 +657,7 @@ td {
                     <div class="btn three-d"  onclick="scrapBucket()">报废</div>
             </td>
         </tr>
-        
+
         <tr>
             <td colspan="2" id="printer_ready">
                 <font style="color: red;">打印机未就绪</font>

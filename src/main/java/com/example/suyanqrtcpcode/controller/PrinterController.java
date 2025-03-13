@@ -1,36 +1,20 @@
 package com.example.suyanqrtcpcode.controller;
 
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.locks.ReentrantLock;
-
-
-import cn.hutool.extra.mail.MailUtil;
+import cn.hutool.core.map.MapBuilder;
+import cn.hutool.core.util.StrUtil;
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
-import com.example.suyanqrtcpcode.bean.AjaxJson;
-import com.example.suyanqrtcpcode.bean.BucketType;
-import com.example.suyanqrtcpcode.bean.PrinterConfigData;
-import com.example.suyanqrtcpcode.bean.SelectOptionData;
+import com.example.suyanqrtcpcode.bean.*;
 import com.example.suyanqrtcpcode.constants.HttpUrlFactory;
 import com.example.suyanqrtcpcode.constants.WsConstant;
-import com.example.suyanqrtcpcode.exceptions.BusinessException;
 import com.example.suyanqrtcpcode.core.handle.CellPhoneHandler;
 import com.example.suyanqrtcpcode.core.handle.PrinterHandler;
 import com.example.suyanqrtcpcode.core.handle.WebSocketServerHandler;
-import com.example.suyanqrtcpcode.runner.LoadDataRunner;
-import com.example.suyanqrtcpcode.utils.RedisUtils;
-import com.example.suyanqrtcpcode.utils.RestTemplateUtil;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
+import com.example.suyanqrtcpcode.exceptions.BusinessException;
+import com.example.suyanqrtcpcode.service.RedisCodeService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.PropertySource;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -38,14 +22,18 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Controller;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
-import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.client.RestTemplate;
 
 import javax.annotation.PostConstruct;
+import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 
 /**
@@ -54,33 +42,21 @@ import javax.servlet.http.HttpServletRequest;
 @Controller
 @RequestMapping("/printerController")
 @PropertySource("classpath:suyan-config.properties")
+@Slf4j
 public class PrinterController {
 
-    private final static Logger LOGGER = LoggerFactory.getLogger(PrinterController.class);
-
-    @Autowired
+    @Resource
     private RestTemplate  restTemplate;
 
-    @Autowired
-    private RedisUtils redisUtils;
 
-    private final ReentrantLock lock = new ReentrantLock();
-
-
-    @Value("${redis.maxListLength}")
-    private int maxListLength;
-
-    @Value("${redis.surListLength}")
-    private int surListLength;
-
-
-    @Value("${taskEnabled}")
-    private  Boolean  taskEnabled;
+    @Resource
+    private RedisCodeService redisCodeService;
 
 
     // 定义几个类型
-    public static final List<SelectOptionData> btList = new ArrayList<>();
+    public static final List<BucketType> bucketTypeList = new ArrayList<>();
     public static final List<SelectOptionData> bmList = new ArrayList<>();
+    public static final List<SelectOptionData> btList = new ArrayList<>();
 
     static {
         bmList.add(new SelectOptionData("01", "芯片桶"));
@@ -88,7 +64,7 @@ public class PrinterController {
         bmList.add(new SelectOptionData("03", "二维码芯片桶"));
     }
 
-    @Autowired
+    @Resource
     HttpServletRequest request;
 
 
@@ -97,21 +73,44 @@ public class PrinterController {
      */
     @PostConstruct
     public void init() {
-        // 调用其他服务器接口获取数据
-        JSONObject forObject = restTemplate.getForObject(HttpUrlFactory.HTTPCILENURT+"/bucketLabelForMobile/getBucketTypeList.do", JSONObject.class);
-        LOGGER.info("初始化内容" + forObject.toString());
-        // 对获取到的数据进行处理
-        if (forObject == null)  {LOGGER.info("初始化找不到内容" );return;}
-        Integer integer = forObject.getInteger("state");
-        if (integer == 1) {
-            JSONArray jsonArray = forObject.getJSONArray("BucketTypeList");
-            List<BucketType> bucketTypeList = JSON.parseArray(jsonArray.toString(), BucketType.class);
-            for (BucketType bucketType : bucketTypeList) {
-                btList.add(new SelectOptionData(bucketType.getId(),bucketType.getModelName()));
+        try {
+            JSONObject forObject = fetchBucketTypeList();
+            if (forObject == null) {
+                log.error("初始化找不到内容");
+                return;
             }
-        }else LOGGER.info("返回内容不正确,请检查接口" );return;
+            processBucketTypeList(forObject);
+        } catch (Exception e) {
+            log.error("初始化过程中发生异常", e);
+        }
+    }
+
+    private JSONObject fetchBucketTypeList() {
+        return restTemplate.getForObject(HttpUrlFactory.HTTPCILENURT + "/bucketLabelForMobile/getBucketTypeList.do", JSONObject.class);
 
     }
+
+
+    private void processBucketTypeList(JSONObject forObject) {
+        if (!forObject.containsKey("state") || !forObject.containsKey("BucketTypeList")) {
+            log.error("返回内容缺少必要字段",forObject.get("msg"));
+            return;
+        }
+        Integer state = forObject.getInteger("state");
+        if (state == 1) {
+            JSONArray jsonArray = forObject.getJSONArray("BucketTypeList");
+            List<BucketType> bucketTypeList = JSON.parseArray(jsonArray.toString(), BucketType.class);
+            PrinterController.bucketTypeList.addAll(bucketTypeList);
+
+            //通过过滤拿到btList内容
+            List<SelectOptionData>  sodList  = bucketTypeList.stream().map(m -> new SelectOptionData(m.getId(), m.getModelName())).collect(Collectors.toList());
+            btList.addAll(sodList);
+
+        } else {
+            log.error("返回内容不正确,请检查接口");
+        }
+    }
+
 
 
     @RequestMapping("/bindingBucket")
@@ -151,20 +150,10 @@ public class PrinterController {
         }
     }
 
+
     @RequestMapping("/toPage")
-    public String toPage(HttpServletRequest request) throws Exception {
-        String path = request.getContextPath();
-        String basePath = request.getScheme() + "://" + request.getServerName() + ":" + request.getServerPort() + path;
-        String bucketTypeId = PrinterConfigData.getBucketTypeId();
-        String bucketMode = PrinterConfigData.getBucketMode();
-        SelectOptionData selectOptionData1 = bmList.stream().filter(o -> o.getKey().equals(bucketMode)).findAny()
-                .orElse(null);
-        SelectOptionData selectOptionData2 = btList.stream().filter(o -> o.getKey().equals(bucketTypeId)).findAny()
-                .orElse(null);
-        request.setAttribute("bucketTypeId", selectOptionData1==null?"暂无选择":selectOptionData1.getValue());
-        request.setAttribute("bucketMode", selectOptionData2==null?"暂无选择":selectOptionData2.getValue());
-        request.setAttribute("basePath", basePath);
-        request.setAttribute("print_cnt", LoadDataRunner.getDataMapCnt());
+    public String toPage() throws Exception {
+
         return "printer/toPage";
     }
 
@@ -181,105 +170,117 @@ public class PrinterController {
         return map;
     }
 
+
+
     @RequestMapping("/getSessionConfig")
     @ResponseBody
-    public Map<String, Object> getSessionConfig() {
-        Map<String, Object> map = new HashMap<String, Object>();
-        map.put("soList", btList);
-        map.put("bmList", bmList);
-        return map;
+    public AjaxJson getSessionConfig() {
+        // 使用链式构造响应对象
+        AjaxJson.AjaxJsonBuilder responseBuilder = AjaxJson.builder()
+                .success(false)
+                .msg("初始化中");
+        try {
+            String path = request.getContextPath();
+            String basePath = request.getScheme() + "://" + request.getServerName() + ":" + request.getServerPort() + path;
+            String bucketTypeName = PrinterConfigData.getBucketTypeName();//水桶名称
+            String bucketMode = PrinterConfigData.getBucketMode();//二维码方式
+
+            String bucketTypeIdValue = Optional.ofNullable(bucketTypeName)
+                    .orElse("暂无选择");
+
+            String bucketModeValue = Optional.ofNullable(bucketMode)
+                    .orElse("暂无选择");
+
+            String bucketDmValue = Optional.ofNullable(PrinterConfigData.getDomainName())
+                    .orElse("暂无选择");
+
+            //从redis里面取每日数据出来
+            int todayCodeNum = redisCodeService.getTodayCodeNum();
+
+            Map<String, Object> map = MapBuilder
+                    .create(new HashMap<String, Object>())
+                    .put("btList", bucketTypeList)
+                    .put("bmList", bmList)
+                    .put("bucketTypeIdValue", bucketTypeIdValue)
+                    .put("bucketModeValue", bucketModeValue)
+                    .put("bucketDmValue", bucketDmValue)
+                    .put("basePath", basePath)
+                    .put("print_cnt", todayCodeNum)//这里是从redis里面取内容
+                    .build();
+
+            responseBuilder
+                    .success(true)
+                    .msg("获取配置成功")
+                    .obj(map);
+        } catch (Exception e) {
+            log.error("获取配置失败！: ", e);
+            responseBuilder.msg(e.getMessage());
+        }
+        return responseBuilder.build();
     }
 
     @RequestMapping("/saveConfig")
     @ResponseBody
-    public AjaxJson saveConfig(@RequestParam String bucketTypeId, @RequestParam final String bucketMode) {
-        AjaxJson ajaxJson = new AjaxJson();
+    public AjaxJson saveConfig(@RequestBody ConfigFormReq configFormReq) {
+        // 使用链式构造响应对象
+        AjaxJson.AjaxJsonBuilder responseBuilder = AjaxJson.builder()
+                .success(false)
+                .msg("初始化中");
         try {
-            // 存入到session
-            Map<String, Object> map = new HashMap<String, Object>();
-            map.put("bucketTypeId", bucketTypeId);
-            map.put("bucketMode", bucketMode);
-            // 这里未来方便niam进行获取有一定的不安全性质
-            PrinterConfigData.setBucketMode(bucketMode);
-            PrinterConfigData.setBucketTypeId(bucketTypeId);
-            long listLength = redisUtils.getListLength(HttpUrlFactory.QRCODEMANAGEMENTKEYVALUS);
-            if(listLength<=surListLength){
-                //开始加载数据
-                saveRedisCode();
-            }
+            // 参数校验（使用Spring Validation）
+            String dmc = validateParams(configFormReq);
+
+            BucketType bucketType = bucketTypeList.stream().filter(b -> configFormReq.getBucketTypeId().equals(b.getId())).findFirst().orElseThrow(()-> new BusinessException("未找到对应的BucketType配置"));
+
+            SelectOptionData bmData = bmList.stream().filter(b -> configFormReq.getBucketModeId().equals(b.getKey())).findFirst().orElseThrow(()-> new BusinessException("未找到对应的BucketMode配置"));
+
+            //TODO 这里后续改的时候考虑下多线程，使用的是元空间，多线程可以考虑用 ThreadLocal
+            PrinterConfigData.setBucketTypeName(bucketType.getModelName());//水桶名称
+            PrinterConfigData.setBucketTypeId(bucketType.getId());//水桶id
+            PrinterConfigData.setFactoryId(bucketType.getFactoryId());//水厂id
+            PrinterConfigData.setBucketMode(bmData.getValue());
+            PrinterConfigData.setDomainName(dmc);//前缀名称
+
+            // 考虑多线程
+            Map<String, Object> map = new ConcurrentHashMap<>();
+            map.put("domainName",dmc);
+            // 同步执行执行Redis条件检查
+            redisCodeService.checkAndReloadCodes(bucketType.getFactoryId(),false);
+
+            // 构造响应（防御性拷贝）
+            responseBuilder
+                    .success(true)
+                    .msg("配置保存成功")
+                    .obj(map);
         } catch (Exception e) {
-            e.printStackTrace();
-            ajaxJson.setSuccess(false);
-            ajaxJson.setMsg(e.getMessage());
+            log.error("系统异常: ", e);
+            responseBuilder.msg(e.getMessage());
         }
-        return ajaxJson;
+        return  responseBuilder.build();
     }
-
-
 
     /**
-     * @throws Exception
-     *
+     * 参数校验
      */
-    public void saveRedisCode() throws Exception {
-        LOGGER.info("开始加载code");
-        // 主机的redis才进行加载数据
-        if (!taskEnabled) {
-            return;
+    private String validateParams(ConfigFormReq configFormReq) {
+        // 检查参数是否为空
+        Optional.ofNullable(configFormReq)
+                .filter(req -> !StrUtil.isBlank(req.getBucketTypeId()))
+                .filter(req -> !StrUtil.isBlank(req.getBucketModeId()))
+                .orElseThrow(() -> new BusinessException("参数不能为空"));
+
+        BucketType bucketType = bucketTypeList.stream().filter(b -> configFormReq.getBucketTypeId().equals(b.getId())).findFirst().orElseThrow(()-> new BusinessException("未找到对应的BucketType配置"));
+
+        //比较前缀
+        String dmc = configFormReq.getMyCheckbox()
+                ? bucketType.getDomainName() + bucketType.getFactoryCode()
+                : bucketType.getDomainName();
+
+        if(!dmc.equals(configFormReq.getDomainName())){
+            throw new BusinessException("参数不一致重新设置");
         }
 
-        // 插入可重入锁
-
-        lock.lock();
-        long listLength = redisUtils.getListLength(HttpUrlFactory.QRCODEMANAGEMENTKEYVALUS);
-        if(listLength>=maxListLength){
-            //减少不必要的锁竞争
-            return ;
-        }
-        LOGGER.info("开始访问调用");
-
-        try {
-            // 加载水桶内容信息
-            String httpUrl = HttpUrlFactory.getHttpUrl("getQrCodeList");
-            RestTemplateUtil restTemplateUtil = new RestTemplateUtil(restTemplate);
-            Map<String, Object> params = new HashMap<String, Object>();
-            params.put("bizBucketTypeId", PrinterConfigData.getBucketTypeId());
-            params.put("num", maxListLength);
-
-            JSONObject result = restTemplateUtil.getRestTemplate(httpUrl, params);
-
-            LOGGER.info("加载完成");
-            if (result != null) {
-                int intValue = result.getIntValue("state");
-                if (intValue == 1) {
-                    JSONObject grCodeListObj = result.getJSONObject("qrCodeList");
-                    // 遍历键和值
-                    List<String> list = new ArrayList<>();
-                    for (String key : grCodeListObj.keySet()) {
-                        //把key放入list中
-                        list.add(key);
-                    }
-                    // 排序取值
-                    Collections.sort(list);
-                    for (String key : list) {
-                        Map<String, String> map = new HashMap<>();
-                        map.put("index", key);
-                        map.put("code", grCodeListObj.getString(key));
-                        redisUtils.pushBack(HttpUrlFactory.QRCODEMANAGEMENTKEYVALUS, JSON.toJSONString(map));
-                    }
-                } else {
-                    String message = result.getString("message");
-                    throw new BusinessException(message);
-                }
-            } else {
-                throw new BusinessException("加载二维码请求出错");
-            }
-        } finally {
-            lock.unlock();
-        }
+        return dmc;
     }
-
-
-
 
 }

@@ -18,10 +18,14 @@ public interface WsConstant {
 	   public  static  final  String  PRINTER_UPLOAD_STATUS="printer_upload_status";
 	
 
+	   //创建水桶信息
        public  static final String GENERATE_BUCKET_FLAG="generate_bucket";
-       
+
        public  static final String GENERATE_BUCKET_MSG="generate_bucket_msg";
 
+
+		//报废水桶信息
+		public  static final String DESTRUCTION_ALERT_MSG="destruction_alert_msg";
 
 		public static final String HEART_RECEIVE_MSG="heart_data";
 		public static final String ERROR_MSG_DATA="error_msg";

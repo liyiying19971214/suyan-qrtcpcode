@@ -93,23 +93,15 @@
         </filter>
     </appender>
 
-    <!-- 系统模块日志级别控制
-    <logger name="com.example.suyanqrtcpcode" level="debug" >
-        <appender-ref ref="fileLog" />
-        <appender-ref ref="console" />
-        <appender-ref ref="errorFile" />
-    </logger>  -->
 
 
-
-
-    <logger name="io.lettuce.core" level="debug" >
+    <logger name="io.lettuce.core" level="info" >
         <appender-ref ref="fileLog" />
         <appender-ref ref="console" />
         <appender-ref ref="errorFile" />
     </logger>
 
-    <logger name="org.springframework.data.redis" level="debug" >
+    <logger name="org.springframework.data.redis" level="info" >
         <appender-ref ref="fileLog" />
         <appender-ref ref="console" />
         <appender-ref ref="errorFile" />

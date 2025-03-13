@@ -82,7 +82,6 @@ public class WebSocketServerHandler extends SimpleChannelInboundHandler<TextWebS
     }
 
 
-
     /**
      * 水桶报废接口
      * @return
@@ -95,43 +94,17 @@ public class WebSocketServerHandler extends SimpleChannelInboundHandler<TextWebS
             //统一手动处理
             resJo.put(WsConstant.msgtype.GENERATE_BUCKET_FLAG, false);
             resJo.put(WsConstant.msgtype.GENERATE_BUCKET_MSG, " 水桶报废处理成功~~~)");
+            //增加一个报废弹框
+            resJo.put(WsConstant.msgtype.DESTRUCTION_ALERT_MSG, true);
         }catch(Exception e){
             //统一手动处理
             resJo.put(WsConstant.msgtype.GENERATE_BUCKET_FLAG, false);
             resJo.put(WsConstant.msgtype.GENERATE_BUCKET_MSG, "报废异常联系管理员");
+            //增加一个报废弹框
+            resJo.put(WsConstant.msgtype.DESTRUCTION_ALERT_MSG, false);
         }finally {
             WebSocketServerHandler.sendAll(resJo.toString());
         }
-        /**
-         String url = HttpUrlFactory.getHttpUrl("scrapBucket");
-         MultiValueMap<String, String> paramMap = new LinkedMultiValueMap<>();
-         paramMap.add("terminalSign", "990008450019737");// 账号密码
-         paramMap.add("GpsX", "116.764402");// 账号密码
-         paramMap.add("GpsY", "36.580692");// 账号密码
-         paramMap.add("Data", Arrays.asList(PrinterConfigData.getbId()).toString());
-         paramMap.add("SelectModel", "DISCARD_BUCKET_LABEL");
-         paramMap.add("loginName", "laoshanadmin");
-         paramMap.add("companyId", "22222222222222222222222222222");
-         paramMap.add("orgCode", "0104");
-         paramMap.add("roleId", "402888e557217b04015726b83b570003");
-         paramMap.add("userId", "4028e5e4880391ba01880399c3b2000a");
-         RestTemplateUtil restTemplateUtil = new RestTemplateUtil(restTemplate);
-         JSONObject jo = restTemplateUtil.postRestTemplate(url, paramMap);
-         if (jo!= null) {
-         Integer state = jo.getInteger("state");//这里注意超过127救出出错
-         String msg = jo.getString("message");
-         if (state == 1) {
-         resJo.put(WsConstant.msgtype.GENERATE_BUCKET_FLAG, false);
-         msg="水桶报废处理成功~~~";
-         }
-         resJo.put(WsConstant.msgtype.GENERATE_BUCKET_MSG, msg);
-         }else{
-         resJo.put(WsConstant.msgtype.GENERATE_BUCKET_MSG, "请联系管理员，水桶报废出错！");
-         }
-         WebSocketServerHandler.sendAll(resJo.toString());
-         **/
     }
-
-
 
 }

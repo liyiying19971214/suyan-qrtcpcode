@@ -1,80 +1,40 @@
 package com.example.suyanqrtcpcode.core.handle;
 
-import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
 import com.example.suyanqrtcpcode.bean.CustomProtocol;
 import com.example.suyanqrtcpcode.bean.PrinterConfigData;
 import com.example.suyanqrtcpcode.constants.HttpUrlFactory;
 import com.example.suyanqrtcpcode.constants.QRConstant;
 import com.example.suyanqrtcpcode.constants.WsConstant;
-import com.example.suyanqrtcpcode.core.service.StorageService;
-import com.example.suyanqrtcpcode.exceptions.BusinessException;
-import com.example.suyanqrtcpcode.runner.LoadDataRunner;
-import com.example.suyanqrtcpcode.schedule.LoadingQrCodeExecutor;
+import com.example.suyanqrtcpcode.service.RedisCodeService;
 import com.example.suyanqrtcpcode.utils.NettySocketHolder;
-import com.example.suyanqrtcpcode.utils.PropertiesUtil;
-import com.example.suyanqrtcpcode.utils.RedisUtils;
 import com.example.suyanqrtcpcode.utils.SpringUtil;
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.timeout.IdleState;
 import io.netty.handler.timeout.IdleStateEvent;
-import io.netty.util.CharsetUtil;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.util.StringUtils;
-
-import java.util.HashMap;
-import java.util.Map;
 
 /**
  * 这里不能使用spring注入容器因为是new出来的内容
  */
+
+@Slf4j
 public class PrinterHandler extends SimpleChannelInboundHandler<CustomProtocol> {
 
     private final static String sync="sync";
     private static boolean ready=false;
-
-    private static int maxId = 0; // 记录当前最大ID值
-
     private static ChannelHandlerContext ctx=null;
-
-    private static RedisUtils redisUtils;
-
-    private static LoadingQrCodeExecutor loadingQrCodeExecutor;
-
-    private  static  StorageService storageSvc;
-
-    private static int  surListLength;
-
+    private  static final RedisCodeService redisCodeService;
+    static {
+          redisCodeService = SpringUtil.getBean(RedisCodeService.class);
+    }
 
 
     @Value("${taskEnabled}")
     private  Boolean  taskEnabled;
-
-
-
-    /**
-     * 犹豫这个是new出来的无法使用放入spring进行管理
-     */
-    static {
-        redisUtils = SpringUtil.getBean(RedisUtils.class);
-        loadingQrCodeExecutor = SpringUtil.getBean(LoadingQrCodeExecutor.class);
-        storageSvc = SpringUtil.getBean(StorageService.class);
-
-        PropertiesUtil pu=new PropertiesUtil("suyan-config.properties");
-        surListLength=Integer.parseInt(pu.readProperty("redis.surListLength"));
-
-    }
-
-
-
-    private final static Logger LOGGER = LoggerFactory.getLogger(PrinterHandler.class);
-    private static final ByteBuf HEART_BEAT =  Unpooled.unreleasableBuffer(Unpooled.copiedBuffer(new CustomProtocol("locahost","kong").toString(), CharsetUtil.UTF_8));
 
     public static boolean isConnected() {
         return  ctx!=null;
@@ -88,15 +48,15 @@ public class PrinterHandler extends SimpleChannelInboundHandler<CustomProtocol> 
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, CustomProtocol customProtocol) throws Exception {
-        LOGGER.info("收到customProtocol={}", customProtocol);
+        log.info("收到customProtocol={}", customProtocol);
         //保存客户端与 Channel 之间的关系
         NettySocketHolder.put(customProtocol.getId(),(NioSocketChannel)ctx.channel()) ;
         //这里是需要进行获取内容的
         // super.messageReceived(session, message);
         String  message=customProtocol.getContent();
-        LOGGER.info("printer has recived ---------:"+message.toString());
-        if(message!=null && (("string".equals(message.toString().trim())  && PrinterConfigData.getQrCode()!=null  && PrinterConfigData.getQrNumber()!=null )
-                ||  ("givecode".equals(message.toString().trim()) &&  PrinterConfigData.getQrNumber()==null  ))
+        log.info("printer has recived ---------:"+ message);
+        if(message!=null && (("string".equals(message.trim())  && PrinterConfigData.getQrCode()!=null  && PrinterConfigData.getQrNumber()!=null )
+                ||  ("givecode".equals(message.trim()) &&  PrinterConfigData.getQrNumber()==null  ))
         ){
             synchronized (sync) {
                 ready = true;
@@ -124,45 +84,34 @@ public class PrinterHandler extends SimpleChannelInboundHandler<CustomProtocol> 
                     JSONObject jo = new JSONObject();
                     try {
                         String msg="";
-                        if ("string".equals(message.toString().trim())) {
+                        if ("string".equals(message.trim())) {
                             jo.put(WsConstant.msgtype.GENERATE_BUCKET_MSG, "等待绑定水桶,请稍等~~~~");
                             //内容赋值
                             msg=PrinterConfigData.getQrCode();
-                        } else if ("givecode".equals(message.toString().trim())) {
+                        } else if ("givecode".equals(message.trim())) {
                             //code = getQrCode("getQrCodeIndex");
-                            //检查数量原子性操作
-                            long listLength = redisUtils.getListLength(HttpUrlFactory.QRCODEMANAGEMENTKEYVALUS);
-                            if(listLength<=surListLength){
-                                //开启新线程去执行
-                                loadingQrCodeExecutor.myMethod();
-                            }
-                            //弹出内容信息
-                            String firstElement= redisUtils.removeElement(HttpUrlFactory.QRCODEMANAGEMENTKEYVALUS);
-
-                            if(StringUtils.isEmpty(firstElement)){
-                               throw new BusinessException("电脑二维码内容已用完,重试");
-                            }
+                            //弹出内容信息.这里考虑lua脚本来编写防止出现丢失数据
+                            String firstElement = redisCodeService.removeFirstCode(PrinterConfigData.getFactoryId());
                             JSONObject firstObj = JSONObject.parseObject(firstElement);
-                            String index=firstObj.getString("index");
+                            String  index=firstObj.getString("index");
                             String  code=firstObj.getString("code");
                             PrinterConfigData.setQrNumber(index);
-                            PrinterConfigData.setQrCode(HttpUrlFactory.DOMAIN_NAME+code);
+                            //TODO 多线程下从副本对象中去取内容，这里是单线程
+                            PrinterConfigData.setQrCode(PrinterConfigData.getDomainName()+code);
                             jo.put(WsConstant.msgtype.GENERATE_BUCKET_FLAG, false);
                             //内容赋值
                             msg=PrinterConfigData.getQrNumber();
                         }
                         PrinterHandler.sendMyMsg(msg);
-                        //ctx.writeAndFlush("22222");
-                        //WebSocketServerHandler.sendAll(jo.toString());
-                        LOGGER.debug("========"+msg);
+                        log.debug("========"+msg);
                         //这里是进行水桶绑定情况
                         if (PrinterConfigData.getQrCode() != null && PrinterConfigData.getQrNumber() != null
-                                && "string".equals(message.toString().trim())) {
+                                && "string".equals(message.trim())) {
                             JSONObject sbJo = saveBucket();
                             WebSocketServerHandler.sendAll(sbJo.toString());
                         }
                     } catch (Exception e) {
-                        LOGGER.error("错误信息",e);
+                        log.error("错误信息",e);
                         jo.put(WsConstant.msgtype.SERVER_SEND_MSG, "错误信息:" + e.getMessage());
                         jo.put(WsConstant.msgtype.CELLPHONE_SEND_MSG, message);
                         WebSocketServerHandler.sendAll(jo.toString());
@@ -183,7 +132,7 @@ public class PrinterHandler extends SimpleChannelInboundHandler<CustomProtocol> 
         if (evt instanceof IdleStateEvent){
             IdleStateEvent idleStateEvent = (IdleStateEvent) evt ;
             if (idleStateEvent.state() == IdleState.READER_IDLE){
-                LOGGER.info("已经20秒没有收到信息！");
+                log.info("已经20秒没有收到信息！");
 
                // ctx.writeAndFlush(HEART_BEAT).addListener(ChannelFutureListener.CLOSE_ON_FAILURE) ;
             }
@@ -201,10 +150,10 @@ public class PrinterHandler extends SimpleChannelInboundHandler<CustomProtocol> 
      */
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
-        LOGGER.info("客户端连接进来"+ctx.channel().remoteAddress());
-        this.ctx=ctx;
+        log.info("客户端连接进来"+ctx.channel().remoteAddress());
+        PrinterHandler.ctx =ctx;
         JSONObject jo=new JSONObject();
-        jo.put(WsConstant.msgtype.PRINTER_CONNECTION_STATUS.toString(),true);
+        jo.put(WsConstant.msgtype.PRINTER_CONNECTION_STATUS,true);
         jo.put(WsConstant.msgtype.PRINTER_CONNECTED_IP,getConnectedIp());
         WebSocketServerHandler.sendAll(jo.toString());
     }
@@ -216,6 +165,12 @@ public class PrinterHandler extends SimpleChannelInboundHandler<CustomProtocol> 
      */
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+        log.info("客户端断开连接"+ctx.channel().remoteAddress());
+        PrinterHandler.ctx =ctx;
+        JSONObject jo=new JSONObject();
+        jo.put(WsConstant.msgtype.PRINTER_CONNECTION_STATUS,false);
+        jo.put(WsConstant.msgtype.PRINTER_CONNECTED_IP,getConnectedIp());
+        WebSocketServerHandler.sendAll(jo.toString());
         NettySocketHolder.remove((NioSocketChannel) ctx.channel());
     }
 
@@ -270,72 +225,23 @@ public class PrinterHandler extends SimpleChannelInboundHandler<CustomProtocol> 
      *
      * @return
      */
-    public JSONObject  saveBucket() {
+    public JSONObject  saveBucket() throws Exception{
         //删除数据内容
         JSONObject  resJo=new JSONObject();
         resJo.put(WsConstant.msgtype.GENERATE_BUCKET_FLAG, true);
-        //插入excel
-        try {
-            JSONObject msgJo=new  JSONObject();
-            msgJo.put("bucketId", PrinterConfigData.getQrNumber());
-            msgJo.put("QRCodeStr", PrinterConfigData.getQrCode());
-            storageSvc.save2MyLog(msgJo);
-            resJo.put(WsConstant.msgtype.PRINT_CNT, LoadDataRunner.getDataMapCnt());
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+
         //存储数据
-        Map<String, String> map=new HashMap<>();
-        map.put("terminalSign", "358406100096392");
-        map.put("bizBucketTypeld", PrinterConfigData.getBucketTypeId());
-        map.put("qno", PrinterConfigData.getQrNumber());
-        map.put("qrCode", PrinterConfigData.getQrCode());
-        map.put("userName", "laoshanadmin");
-        map.put("userPwd", "123456");
-        redisUtils.pushBack(HttpUrlFactory.QRCODEMANAGEMENTGENERATEBUCKET, JSON.toJSONString(map));
-        //存储最后一次的num
+        redisCodeService.pushCodeByMap(PrinterConfigData.getFactoryId());
+        //情况数据，保留最后一个
+        clearPrinterConfig();
+        return resJo;
+    }
+
+    private void clearPrinterConfig() {
         PrinterConfigData.setLastqrNumber(PrinterConfigData.getQrNumber());
         PrinterConfigData.setQrNumber(null);
         PrinterConfigData.setQrCode(null);
-        resJo.put(WsConstant.msgtype.GENERATE_BUCKET_MSG, "水桶绑定成功");
-        return resJo;
-//	        JSONObject  resJo=new JSONObject();
-//	        String url = HttpUrlFactory.getHttpUrl("createQrCodeBucket");
-//	        MultiValueMap<String, String> paramMap = new LinkedMultiValueMap<>();
-//	        paramMap.add("bizBucketTypeId", PrinterConfigData.getBucketTypeId());// 设备号，
-//	        paramMap.add("terminalSign", "990008450019737");// 账号密码
-//	        paramMap.add("qrCode", PrinterConfigData.getQrCode());// 账号密码
-//	        paramMap.add("qno", PrinterConfigData.getQrNumber());// 账号密码
-//	        paramMap.add("userName", "laoshanadmin");
-//	        paramMap.add("userPwd", "123456");
-//	        JSONObject jo = RestTemplateUtil.postRestTemplate(url, paramMap);
-//	        if (jo!= null) {
-//                Integer state = jo.getInteger("state");//这里注意超过127救出出错
-//                String msg = jo.getString("message");
-//                if (state == 1) {
-//                    String bId = jo.getString("bId");
-//                    PrinterConfigData.setbId(bId);//存入数据
-//                    resJo.put(WsConstant.msgtype.GENERATE_BUCKET_FLAG, true);
-//
-//                    //插入excel
-//                    try {
-//                        JSONObject msgJo=new  JSONObject();
-//                        msgJo.put("bucketId", PrinterConfigData.getQrNumber());
-//                        msgJo.put("QRCodeStr", PrinterConfigData.getQrCode());
-//                        storageSvc.save2MyLog(msgJo);
-//                        resJo.put(WsConstant.msgtype.PRINT_CNT, LoadDataRunner.getDataMapCnt());
-//                    } catch (Exception e) {
-//                        e.printStackTrace();
-//                    }
-//
-//                    PrinterConfigData.setQrNumber(null);
-//                    PrinterConfigData.setQrCode(null);
-//                }
-//                resJo.put(WsConstant.msgtype.GENERATE_BUCKET_MSG, msg);
-//            }
-//	        return resJo;
     }
-
 
     private static void sendMessage(ChannelHandlerContext ctx, Object message){
         if(ctx == null){

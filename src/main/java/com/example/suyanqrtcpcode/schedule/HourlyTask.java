@@ -19,6 +19,7 @@ import org.springframework.web.client.RestTemplate;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Optional;
 
 import static io.lettuce.core.pubsub.PubSubOutput.Type.message;
 
@@ -43,6 +44,7 @@ public class HourlyTask {
 
     @Scheduled(cron = "#{@environment['scheduled.task.cron']}") // 每30秒执行
     public void executeTask() {
+        log.info("定时器工作！");
         if(!taskEnabled){
             log.info("定时器配置未打开！");
             return;
@@ -53,57 +55,79 @@ public class HourlyTask {
         JSONObject uploadJo=new JSONObject();
         uploadJo.put(WsConstant.msgtype.PRINTER_UPLOAD_STATUS,listLength);
         WebSocketServerHandler.sendAll(uploadJo.toString());
-        if(listLength!=0){
-            // 定时的去推送消息内容，这里可以考虑使用队列而不是http消息接口
-            String firstElement = redisUtils.getFirstElement(HttpUrlFactory.QRCODEMANAGEMENTGENERATEBUCKET);
-            String httpUrl = HttpUrlFactory.getHttpUrl("createQrCodeBucket");
-            JSONObject jo = JSONObject.parseObject(firstElement);
-            // 调用post方法去执行内容
-            MultiValueMap<String, String> paramMap = new LinkedMultiValueMap<>();
-            paramMap.add("bizBucketTypeId", jo.getString("bizBucketTypeld"));// 设备号，
-            paramMap.add("terminalSign", jo.getString("terminalSign"));// 账号密码
-            paramMap.add("qrCode", jo.getString("qrCode"));// 账号密码
-            paramMap.add("qno", jo.getString("qno"));// 账号密码
-            paramMap.add("userName", "shuitongchang");
-            paramMap.add("userPwd","123456");
-            try {
-                RestTemplateUtil restTemplateUtil = new RestTemplateUtil(restTemplatel);
-                JSONObject resJo = restTemplateUtil.postRestTemplate(httpUrl, paramMap);
-                if (resJo == null) {
-                    log.error("返回内容为空>>>>>>>>>>>" + jo.getString("qrCode") + "未绑定成功" + jo.getString("qno"));
-                    sendEmail(jo,"返回内容为空>>>>>>>>>>>");
-                    return;
-                }
-                int intValue = resJo.getIntValue("state");
-                if (intValue == 1) {
-                    // 删掉redis存在的内容信息.性能够用不需要使用其他的持久化策略
-//                    redisUtils.removeElement(HttpUrlFactory.QRCODEMANAGEMENTGENERATEBUCKET);
-//                    redisUtils.incr(HttpUrlFactory.QRCODEMANAGEMENTCOUNTERKEY);
-                    redisUtils.addLua();
-                } else {
-                    //这里要使用lua脚本
-                    String element  = redisUtils.removeElement(HttpUrlFactory.QRCODEMANAGEMENTGENERATEBUCKET);
-                    //放入新的队列中去
-                    redisUtils.pushBack(HttpUrlFactory.QRCODEMANAGEMENTERRORBUCKET,element);
-                    String message = resJo.getString("message");
-                    log.error("返回信息不成功>>>>>>>>>>>" + jo.getString("qrCode") + "未绑定成功" + jo.getString("qno") + "错误信息" + message);
-                    sendEmail(jo,message);
-                }
-            } catch (Exception e) {
-                log.error("异常信息>>>>>>>>>>>" + jo.getString("qrCode") + "未绑定成功" + jo.getString("qno"),e);
-                sendEmail(jo,e.getMessage());
-            }
-        }
+
+        // 如果列表不为空，处理第一个元素
+        Optional.of(listLength)
+                .filter(length -> length != 0)
+                .ifPresent(length -> processFirstElement());
 
     }
 
+
+    private void processFirstElement() {
+        // 获取 Redis 列表中的第一个元素
+        Optional<String> firstElementOpt = Optional.ofNullable(redisUtils.getFirstElement(HttpUrlFactory.QRCODEMANAGEMENTGENERATEBUCKET));
+
+        firstElementOpt.ifPresent(firstElement -> {
+            JSONObject jo = JSONObject.parseObject(firstElement);
+            String httpUrl = HttpUrlFactory.getHttpUrl("createQrCodeBucket");
+
+            // 构建请求参数
+            MultiValueMap<String, String> paramMap = new LinkedMultiValueMap<>();
+            paramMap.add("bizBucketTypeId", jo.getString("bizBucketTypeld"));
+            paramMap.add("terminalSign", jo.getString("terminalSign"));
+            paramMap.add("qrCode", jo.getString("qrCode"));
+            paramMap.add("qno", jo.getString("qno"));
+            paramMap.add("userName", "shuitongchang");
+            paramMap.add("userPwd", "123456");
+
+            // 发送 HTTP 请求
+            try {
+                RestTemplateUtil restTemplateUtil = new RestTemplateUtil(restTemplatel);
+                JSONObject resJo = restTemplateUtil.postRestTemplate(httpUrl, paramMap);
+                if (resJo != null) {
+                    handleResponse(resJo, jo); // 处理响应
+                } else {
+                    log.error("返回内容为空>>>>>>>>>>>" + jo.getString("qrCode") + "未绑定成功" + jo.getString("qno"));
+                    sendEmail(jo, "返回内容为空>>>>>>>>>>>");
+                }
+            } catch (Exception e) {
+                log.error("异常信息>>>>>>>>>>>" + jo.getString("qrCode") + "未绑定成功" + jo.getString("qno"), e);
+                sendEmail(jo, e.getMessage());
+            }
+        });
+    }
+
+    private void handleResponse(JSONObject resJo, JSONObject jo) throws  Exception{
+        Optional.of(resJo.getIntValue("state"))
+                .ifPresent(state -> {
+                    if (state == 1) {
+                        // 成功时执行 Lua 脚本
+                        redisUtils.addLua();
+                    } else {
+                        // 失败时将元素移到错误队列
+                        String element = redisUtils.removeElement(HttpUrlFactory.QRCODEMANAGEMENTGENERATEBUCKET);
+                        redisUtils.pushBack(HttpUrlFactory.QRCODEMANAGEMENTERRORBUCKET, element);
+
+                        String message = resJo.getString("message");
+                        log.error("返回信息不成功>>>>>>>>>>>" + jo.getString("qrCode") + "未绑定成功" + jo.getString("qno") + "错误信息" + message);
+                        sendEmail(jo, message);
+                    }
+                });
+    }
+
+
     private void sendEmail(JSONObject jo,String message) {
-        String  str= jo.getString("qrCode") + "未绑定成功" + jo.getString("qno") + "错误信息" + message;
-        // ===============发送邮件================
-        LocalDateTime currentDateTime = LocalDateTime.now();
-        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-        String formattedDateTime = currentDateTime.format(formatter);
-        MailUtil.send("1519583238@qq.com", "生产情况"+formattedDateTime, str, false);
+        try {
+            String  str= jo.getString("qrCode") + "未绑定成功" + jo.getString("qno") + "错误信息" + message;
+            // ===============发送邮件================
+            LocalDateTime currentDateTime = LocalDateTime.now();
+            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+            String formattedDateTime = currentDateTime.format(formatter);
+            MailUtil.send("1519583238@qq.com", "生产情况"+formattedDateTime, str, false);
+        }catch (Exception e){
+            log.error("邮件功能异常！",e);
+        }
         // ===============发送邮件================
     }
 

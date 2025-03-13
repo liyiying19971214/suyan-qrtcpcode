@@ -1,5 +1,7 @@
 package com.example.suyanqrtcpcode.utils;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 import com.example.suyanqrtcpcode.constants.HttpUrlFactory;
@@ -20,22 +22,41 @@ public class   RedisUtils {
     @Resource
     public StringRedisTemplate stringRedisTemplate ;
 
-
-
     public List<String> addLua(){
+        //生成当前时间,用来记录当前打印的数量
+        LocalDate now = LocalDate.now();
+        String format = now.format(DateTimeFormatter.ISO_DATE);
+
+        // Lua 脚本
         String script =
-                "local keyValue = KEYS[1] " +
+                        "local currentDate = KEYS[3]"+
+                       "local keyValue = KEYS[1] " +
                         "local keyList = KEYS[2] " +
-                        "local incrResult = redis.call('INCRBY', keyValue, 1) " +
+                        "local incrResult = redis.call('HINCRBY', keyValue, currentDate ,1) " +
                         "if incrResult then " +
                         "  local poppedValue = redis.call('LPOP', keyList) " +
                         "  return poppedValue " +
                         "end";
 
-        List<String> keys = Arrays.asList(HttpUrlFactory.QRCODEMANAGEMENTCOUNTERKEY, HttpUrlFactory. QRCODEMANAGEMENTGENERATEBUCKET);
+        // 脚本参数
+        List<String> keys = Arrays.asList(HttpUrlFactory.QRCODEMANAGEMENTCOUNTERKEY, HttpUrlFactory.QRCODEMANAGEMENTGENERATEBUCKET,format);
+
+        // 执行 Lua 脚本
         List<String> result = stringRedisTemplate.execute(new DefaultRedisScript<>(script, List.class), keys);
-        return  result;
+
+        // 返回结果
+        return result;
     }
+
+    public   Integer  getTodayCodeNum(String  timeData) throws  Exception{
+        // 获取值并使用 Optional 处理
+        Integer count = Optional.ofNullable((String) stringRedisTemplate.opsForHash().get(HttpUrlFactory.QRCODEMANAGEMENTCOUNTERKEY, timeData))
+                .map(Integer::valueOf) // 将 String 转换为 Integer
+                .orElse(0); // 如果值为 null，则返回默认值 0
+        return count;
+    }
+
+
     /**
      * 存入信息到缓存
      */
